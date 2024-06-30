@@ -1,0 +1,1525 @@
+--{{SERVICES}}--
+local playerService = game:GetService('Players')
+local runService = game:GetService("RunService")
+local userInputService = game:GetService("UserInputService")
+local replicatedStorage = game:GetService("ReplicatedStorage")
+local tweenService = game:GetService("TweenService")
+local debrisService = game:GetService("Debris")
+local Data = require(replicatedStorage:WaitForChild("Data"))
+local cursubcd = 0
+local maxsubcd = 80
+local hasSubCd = false
+
+--{{VARIABLES}}--
+local playerInstance = playerService.LocalPlayer
+
+local playerCharacter = script.Parent
+local characterHumanoid, characterHumanoidRootPart, characterTorso = playerCharacter:WaitForChild("Humanoid"), playerCharacter:WaitForChild("HumanoidRootPart"), playerCharacter:WaitForChild("Torso")
+
+local rootJoint, leftHipJoint, rightHipJoint = characterHumanoidRootPart.RootJoint, characterTorso["Left Hip"], characterTorso["Right Hip"]
+
+local workspaceCamera = workspace.CurrentCamera
+local subcdevent = game.ReplicatedStorage:WaitForChild("ClientEvents"):WaitForChild("SubCD")
+local replicatedAssets = replicatedStorage.ReplicatedAssets
+local gameAssets = replicatedStorage.GameAssets
+
+local _Animations = replicatedAssets._Animations
+local PlayerAnimations = _Animations.Player
+
+local _Sounds = replicatedAssets._Sounds
+local PlayerSounds = _Sounds.Player
+
+local _Modules = gameAssets._Modules
+
+local _Movement = gameAssets._Movement
+
+
+local plr = game.Players.LocalPlayer
+
+
+local rayPresets = {
+	collide = function(hit) return hit.CanCollide == true end,
+	nocollide = function(hit) return hit.CanCollide == false end,
+	opaque = function(hit) return hit.Transparency <= 0 end,
+	transparent = function(hit) return hit.Transparency > 0 end,
+	notplayer = function(hit) local model = hit:FindFirstAncestorWhichIsA("Model") return (hit.CanCollide == true and (not model or not model:FindFirstChildWhichIsA("Humanoid"))) end,
+}
+
+local rayIgnore = {playerCharacter, workspace.CurrentCamera}
+
+local var = {
+	hitLeft = nil,
+	posLeft = nil,
+	normalLeft = nil,
+	hitRight = nil,
+	posRight = nil,
+	normaRight = nil,	
+}
+
+--{{ANIMATIONS}}--
+local RunAnimation = characterHumanoid:LoadAnimation(PlayerAnimations.RunAnimation)
+local LandAnimation = characterHumanoid:LoadAnimation(PlayerAnimations.LandAnimation)
+local RollAnimation = characterHumanoid:LoadAnimation(PlayerAnimations.RollAnimation)
+local VaultAnimation = characterHumanoid:LoadAnimation(PlayerAnimations.VaultAnimation)
+local tget = characterHumanoid:LoadAnimation(game.ReplicatedStorage.Assets.Animations.Getups.Back)
+local LGet = characterHumanoid:LoadAnimation(game.ReplicatedStorage.Assets.Animations.Getups.Left)
+local RGet = characterHumanoid:LoadAnimation(game.ReplicatedStorage.Assets.Animations.Getups.Right)
+local idle = characterHumanoid:LoadAnimation(game.ReplicatedStorage.Assets.Animations.BallAnims.Idle)
+local GKEquip = characterHumanoid:LoadAnimation(game.ReplicatedStorage.Assets.Animations.GK["Glove Equip"])
+local GKL = characterHumanoid:LoadAnimation(game.ReplicatedStorage.Assets.Animations.GK.LeftGround)
+local GKR = characterHumanoid:LoadAnimation(game.ReplicatedStorage.Assets.Animations.GK.RightGround)
+local nagi = characterHumanoid:LoadAnimation(game.ReplicatedStorage.Assets.Animations.Skills.Airtrap)
+local LD = characterHumanoid:LoadAnimation(game.ReplicatedStorage.Assets.Animations.BallAnims.Dashes.LeftDash)
+local RD = characterHumanoid:LoadAnimation(game.ReplicatedStorage.Assets.Animations.BallAnims.Dashes.RightDash)
+local FGET = characterHumanoid:LoadAnimation(game.ReplicatedStorage.Assets.Animations.Getups.Front)
+local TKLD = characterHumanoid:LoadAnimation(game.ReplicatedStorage.Assets.Animations.Defense.Tackled)
+local FD = characterHumanoid:LoadAnimation(game.ReplicatedStorage.Assets.Animations.BallAnims.Dashes.Foward)
+local GKHR = characterHumanoid:LoadAnimation(game.ReplicatedStorage.Assets.Animations.GK.HR)
+local GKHL = characterHumanoid:LoadAnimation(game.ReplicatedStorage.Assets.Animations.GK.HL)
+local GKJ = characterHumanoid:LoadAnimation(game.ReplicatedStorage.Assets.Animations.GK.Jump)
+local TKLD = characterHumanoid:LoadAnimation(game.ReplicatedStorage.Assets.Animations.Defense.Kick)
+
+
+--{{TWEENS}}--
+local FOVRun, FOVNormal = tweenService:Create(workspaceCamera, TweenInfo.new(1, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {FieldOfView = 120}), tweenService:Create(workspaceCamera, TweenInfo.new(1, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {FieldOfView = 70})
+
+--{{LOCAL FUNCTIONS}}--
+local function Lerp(a, b, c)
+	return a + (b - a) * c
+end
+
+local function Mix(par1, par2, factor)
+	return par2 + (par1 - par2) * factor
+end
+
+local function PlaySound(sound, name, volume, parent)
+	local sound = sound:Clone()
+	sound.Name = name or "SOUND"
+	sound.Volume = volume or 1
+	sound.Parent = parent
+	sound:Play()
+
+	debrisService:AddItem(sound, sound.TimeLength + 0.1)
+end
+
+local function dupeTable(orig,copies)
+	copies = copies or {}
+	local orig_type = type(orig)
+	local copy
+	if orig_type == 'table' then
+		if copies[orig] then
+			copy = copies[orig]
+		else
+			copy = {}
+			copies[orig] = copy
+			for orig_key, orig_value in next, orig, nil do
+				copy[dupeTable(orig_key, copies)] = dupeTable(orig_value, copies)
+			end
+			setmetatable(copy, dupeTable(getmetatable(orig), copies))
+		end
+	else
+		copy = orig
+	end
+	return copy
+end
+
+local function recursiveRay(stopCondition,ray,ignorelist)
+	if type(stopCondition) == "string" then
+		local orig = stopCondition
+		stopCondition = rayPresets[stopCondition]
+		if stopCondition == nil then error("Cannot find stop condition ".. orig) end
+	end
+	ignorelist = ignorelist and dupeTable(ignorelist) or {}
+	local hit,pos,normal
+	repeat
+		if hit then table.insert(ignorelist,hit) end
+		hit,pos,normal = workspace:FindPartOnRayWithIgnoreList(ray,ignorelist)
+	until hit == nil or stopCondition(hit,pos,normal)
+	return hit,pos,normal
+end
+
+local function movementStopCondition(hit) return (hit.Name == "ClimbExtension" or hit.Name == "Collide" or hit.CanCollide == true) end
+
+local function updateLeftRight(rootpart,range)
+	local speedCoeff = 1--+math.clamp((rootpart.Velocity.magnitude-80)/100,0,1)*2.35
+	local rayL = Ray.new((rootpart.CFrame).p, -rootpart.CFrame.RightVector*(range or 5*speedCoeff))
+	var.hitLeft,var.posLeft,var.normalLeft = recursiveRay(movementStopCondition,rayL,rayIgnore)
+	local rayR = Ray.new((rootpart.CFrame).p, rootpart.CFrame.RightVector*(range or 5*speedCoeff))
+	var.hitRight,var.posRight,var.normalRight = recursiveRay(movementStopCondition,rayR,rayIgnore)
+	return rayL,rayR
+end
+
+local function calculateToNoCollide(part)
+	local parts = {}
+	local function ins(p)
+		if p.CanCollide then table.insert(parts,p) end
+	end
+	if part and part.Parent:IsA("Model") and part.Parent ~= workspace then
+		for i,v in pairs(part.Parent:GetChildren()) do
+			if v:IsA("BasePart") then ins(v) end
+		end
+	elseif part then
+		ins(part)
+	end
+	return parts
+end
+
+local collideables = {}
+for i,v in pairs(workspace:GetDescendants()) do
+	if v:IsA("BasePart") and v.CanCollide then
+		collideables[v] = true
+	end
+end
+
+local phaseParts = {}
+function phase(part)
+	if part and part:IsA("BasePart") then
+		if not collideables[part] and part.CanCollide then collideables[part] = true end
+		if collideables[part] then
+			phaseParts[part] = true
+			part.CanCollide = false
+		end
+	end
+end
+function unphase(part)
+	if part and part:IsA("BasePart") and collideables[part] and phaseParts[part] then
+		phaseParts[part] = nil
+		part.CanCollide = true
+	end
+end
+function unphaseAll()
+	for i,v in pairs(phaseParts) do
+		if i then
+			unphase(i)
+		end
+	end
+end
+function getPhased()
+	return phaseParts
+end
+
+--{{CHARACTER INITIALIZATION}}--
+local BodyPosition, BodyGyro = _Movement.BodyPosition:Clone(), _Movement.BodyGyro:Clone()
+BodyPosition.Parent, BodyGyro.Parent = characterHumanoidRootPart, characterHumanoidRootPart
+
+--{{CAMERA BOBBING}}--
+local Running = false;
+local CF = CFrame.new();
+
+characterHumanoid.Running:Connect(function(Value)
+	if Value >= 5 then
+		Running = true
+	else
+		Running = false
+	end
+end)
+
+
+
+--[[
+local Running = false; local Strafing = false
+local PI = 3.1415926
+
+local tick = PI / 0
+
+characterHumanoid.Strafing:Connect(function(Value)
+	Strafing = Value
+end)
+
+characterHumanoid.Jumping:Connect(function()
+	Running = false
+end)
+
+characterHumanoid.Swimming:Connect(function()
+	Running = false
+end)
+
+characterHumanoid.Running:Connect(function(Value)
+	if Value > 0.1 then
+		Running = true
+	else
+		Running = false
+	end
+end)
+
+runService:BindToRenderStep("cameraBobbingRender", Enum.RenderPriority.Camera.Value + 1, function()
+	local Damping = characterHumanoid.WalkSpeed / 2
+	
+	if Running and not Strafing then
+		tick = tick + characterHumanoid.WalkSpeed / 117
+	else
+		if tick > 0 and tick < PI / 2 then
+			tick = Mix(tick, PI / 2, 0.9)
+		end
+		if tick > PI / 2 and tick < PI then
+			tick = Mix(tick, PI / 2, 0.9)
+		end
+		if tick > PI and tick < PI * 1.5 then
+			tick = Mix(tick, PI * 1.5, 0.9)
+		end
+		if tick > PI * 1.5 and tick < PI * 2 then
+			tick = Mix(tick, PI * 1.5, 0.9)
+		end
+	end
+	
+	if tick >= PI * 2 then
+		tick = 0
+	end	
+	
+	workspaceCamera.CFrame = workspaceCamera.CFrame * CFrame.new(math.cos(tick) / Damping, math.sin(tick * 2) / (Damping * 2), 1) * CFrame.Angles(0, 0, math.sin(tick - PI * 1.5) / (Damping * 20))
+end)
+]]
+
+
+--{{RUNNING}}--
+local vaulting = false
+local wallrunning = false
+local Running = false
+local rolling = false
+local canRun = true
+
+local DataFolder = game.ReplicatedStorage["PlayerData"]:WaitForChild(plr.Name.."'s Data")
+
+local TS = game:GetService("TweenService")
+local char = script.Parent
+local hum = char:WaitForChild("Humanoid")
+
+local DataFolder = game.ReplicatedStorage["PlayerData"]:WaitForChild(plr.Name.."'s Data")
+
+local Height = DataFolder.Height.Value
+
+local HUD = plr.PlayerGui.HUD
+local function timer(t)
+	local t = game.TweenService:Create(script:WaitForChild("SubCD"),TweenInfo.new(t,Enum.EasingStyle.Linear),{Value=0})
+	t:Play()
+	t.Completed:Wait()
+	t = nil
+	hasSubCd = false
+	HUD.SubCD.Visible = false
+	gcinfo()
+end
+local function timerTrait(t)
+	local t = game.TweenService:Create(script:WaitForChild("TraitCD"),TweenInfo.new(t,Enum.EasingStyle.Linear),{Value=0})
+	t:Play()
+	t.Completed:Wait()
+	t = nil
+	gcinfo()
+end
+if not DataFolder.Trait.Value then
+	print("wtf")
+end
+
+local maxStamina = Data.Traits[DataFolder.Trait.Value].MaxStamina
+local maxSpeed = Data.Heights[DataFolder.Height.Value].MaxSpeed + Data.Traits[DataFolder.Trait.Value].MaxSpeedIncrease
+local speeduptime = Data.Traits[DataFolder.Trait.Value].SpeedUpTime
+local originalspeed = 10
+local stamdrain = 1
+local stamrec = 1
+
+local curStamina = maxStamina
+
+--[[if DataFolder.Trait.Value == "Cheetah" then 
+	speeduptime = 3
+	maxSpeed = maxSpeed + 2
+end]]
+
+local Machspeeded = maxSpeed + 12
+
+maxSpeed = maxSpeed
+speeduptime = speeduptime
+
+local ms = maxSpeed + 4
+local Ballspeed = maxSpeed - 4
+
+
+local speedup = TS:Create(hum, TweenInfo.new(speeduptime, Enum.EasingStyle.Sine, Enum.EasingDirection.Out, 0, false, 0), {WalkSpeed = maxSpeed})
+local speedup2 = TS:Create(hum, TweenInfo.new(speeduptime, Enum.EasingStyle.Sine, Enum.EasingDirection.Out, 0, false, 0), {WalkSpeed = Machspeeded})
+local speedup3 = TS:Create(hum, TweenInfo.new(speeduptime, Enum.EasingStyle.Sine, Enum.EasingDirection.Out, 0, false, 0), {WalkSpeed = Machspeeded+2})
+
+local burstspeed = false
+local accelled = false
+
+characterHumanoid.JumpPower = 30 + Data.Traits[DataFolder.Trait.Value].JumpIncrease
+
+userInputService.InputBegan:Connect(function(userInput, gameProcessed)
+	if gameProcessed then return end
+	if userInput.KeyCode == Enum.KeyCode.LeftShift and not playerCharacter:FindFirstChild("knock")  and canRun == true and curStamina > 10 then
+
+		if not Running and not vaulting and not wallrunning then
+
+			Running = true
+		
+			if playerCharacter:FindFirstChild("Mached") then 
+				characterHumanoidRootPart.Chigiri.Shockwave.Enabled = true	
+				characterHumanoidRootPart.Chigri.S3.Enabled = true
+				speedup2:Play()
+			elseif playerCharacter:FindFirstChild('Enhanced') then
+				characterHumanoidRootPart.Sprinterr.Lines.Enabled = true
+				characterHumanoidRootPart.Sprinterr.Lines2.Enabled = true
+				speedup3:Play()
+				
+				task.spawn(function()
+					while Running do
+						if not playerCharacter:FindFirstChild('Enhanced') then
+							speedup:Play()
+							break
+						end
+						task.wait()
+					end
+				end)
+			else		
+				characterHumanoidRootPart.Sprinterr.Lines.Enabled = true
+				characterHumanoidRootPart.Sprinterr.Lines2.Enabled = true
+				speedup:Play()
+			end
+
+			RunAnimation:Play(0.2)
+
+			FOVRun:Play()
+		end
+	elseif userInput.KeyCode == Enum.KeyCode.V then
+		game.ReplicatedStorage.Skill:FireServer(game.ReplicatedStorage.RetrieveSubWeapon:InvokeServer(plr), {UseSkill = true},hasSubCd)
+	end
+end)
+
+
+local CallDB = true
+
+userInputService.InputBegan:Connect(function(userInput, gameProcessed)
+	if gameProcessed then return end
+	if userInput.KeyCode == Enum.KeyCode.B and CallDB == true then
+
+		CallDB = false
+
+		local mouse = game.Players.LocalPlayer:GetMouse()
+		script.SCRIPT.EVENTS.CALLOUT:FireServer(mouse.Hit.Position, mouse.UnitRay)
+
+
+		wait(10)
+
+		CallDB = true
+
+	end
+end)
+
+userInputService.InputEnded:Connect(function(userInput, gameProcessed)
+	if gameProcessed then
+		return
+	end
+
+	if userInput.KeyCode == Enum.KeyCode.LeftShift then
+
+		speedup:Cancel()
+		speedup2:Cancel()
+
+		characterHumanoidRootPart.Chigiri.Shockwave.Enabled = false
+		characterHumanoidRootPart.Chigri.S3.Enabled = false
+
+		characterHumanoidRootPart.Sprinterr.Lines.Enabled = false
+		characterHumanoidRootPart.Sprinterr.Lines2.Enabled = false
+		--maxStamina = alwaysmax
+
+		if Running then
+			characterHumanoidRootPart.Chigiri.Shockwave.Enabled = false	
+			characterHumanoidRootPart.Chigri.S3.Enabled = false
+			characterHumanoidRootPart.Sprinterr.Lines.Enabled = false
+			characterHumanoidRootPart.Sprinterr.Lines2.Enabled = false
+			Running = false
+			RunAnimation:Stop(0.2)
+			characterHumanoid.WalkSpeed = 15
+			FOVNormal:Play()
+		end
+	end
+end)
+
+runService:BindToRenderStep("RunningChecks", Enum.RenderPriority.Character.Value, function()
+	if characterHumanoid.MoveDirection == Vector3.new() then
+		if Running then
+			if RunAnimation.IsPlaying then
+				RunAnimation:Stop(0.2)
+			end
+		end
+	else
+		if Running then
+			if not RunAnimation.IsPlaying then
+				RunAnimation:Play(0.2)
+			end
+		end
+	end
+end)
+
+
+--{{JUMP COOLDOWN}}--
+local jumpDebounce = false
+local jumpCD = 4
+
+local lastLanding = 0
+
+userInputService.JumpRequest:Connect(function()
+	if not jumpDebounce then
+		if characterHumanoid.FloorMaterial == Enum.Material.Air then
+			return
+		end
+
+		jumpDebounce = true
+		characterHumanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+
+		if plr:FindFirstChild("Ball") then
+			jumpCD = 6
+		end
+
+
+
+		task.wait(jumpCD)
+		jumpDebounce = false
+	else
+		characterHumanoid:SetStateEnabled(Enum.HumanoidStateType.Jumping, false)
+	end
+end)
+
+
+
+userInputService.InputBegan:Connect(function(userInput, gameProcessed)
+	if gameProcessed then return end
+	if userInput.KeyCode == Enum.KeyCode.Space and not playerCharacter:FindFirstChild("knock") and 	jumpDebounce == false then
+		if playerCharacter:FindFirstChild("GK") then
+			GKJ:Play()
+		end
+
+		--local JP = 30 + Data.Traits[DataFolder.Trait.Value].JumpIncrease
+
+		--[[if playerCharacter:FindFirstChild("Ball") then
+			if DataFolder.Trait.Value == "Acrobatic Finisher" then
+				if playerCharacter.Humanoid.FloorMaterial == Enum.Material.Air then
+					JP = 35
+				else
+				JP = 0
+			end
+		end]]
+
+		--characterHumanoid.JumpPower = JP
+
+		RunAnimation:Stop(0.2)
+		FOVRun:Play()
+
+		curStamina = curStamina - 70
+	end
+end)
+
+
+--{{ROLL}}--
+local rollDebounce, rollCooldown = false, 3
+
+local rollProperties = {
+	Keybind = Enum.KeyCode.T;
+	Duration = 0.8;
+	Velocity = 45;
+}
+
+
+
+
+local GKG = true
+local charging = false
+userInputService.InputBegan:Connect(function(userInput, gameProcessed)
+	if gameProcessed then return end
+	if userInput.KeyCode == Enum.KeyCode.N and GKG == true  then
+		if characterHumanoid.FloorMaterial == Enum.Material.Air then return end
+
+		script.SCRIPT.EVENTS.GKEQUIP:FireServer()
+		GKG = false
+
+		wait(5)
+
+		GKG = true
+
+	end
+	--[[if userInput.KeyCode == Enum.KeyCode.H then
+		if (curStamina - 50) >= 0 and script.Overcharge.Value < 100 and not charging and playerCharacter:FindFirstChild("Ball") then
+			script.SCRIPT.EVENTS.Overcharge:FireServer(true)
+			charging = true
+			local cantkick = Instance.new("Folder")
+			cantkick.Parent = playerCharacter
+			cantkick.Name = "CantKick"
+			hum.WalkSpeed = 7
+		end
+		
+	end--]]
+end)
+
+
+
+local SlideDebounce = true
+local TackDebounce = true
+local SlideCD = 5
+local TackCD = 3
+
+if DataFolder["Trait"].Value == "Sweeper" then
+	SlideCD = 4
+end
+if DataFolder["Trait"].Value == "Relentless Defender" then
+	SlideCD = 4
+end
+if DataFolder["Trait"].Value == "Brick Wall" then
+	SlideCD = 4
+end
+if DataFolder["Trait"].Value == "Bowling Ball" then
+	SlideCD = 4
+end
+if DataFolder["Trait"].Value == "WellBuilt" then
+	SlideCD = 4 
+end
+if DataFolder["Trait"].Value == "Ace Eater" then
+	SlideCD = 4
+end
+
+local userInputService = game:GetService("UserInputService")
+local replicatedStorage = game:GetService("ReplicatedStorage")
+local slideSound = replicatedStorage.Sounds.Slide -- Reference the sound
+
+userInputService.InputBegan:Connect(function(userInput, gameProcessed)
+	if gameProcessed then return end
+	if userInput.KeyCode == Enum.KeyCode.T 
+		and not playerCharacter:FindFirstChild("Ball") 
+		and not playerCharacter:FindFirstChild("knock") 
+		and not playerCharacter:FindFirstChild("notack") 
+		and SlideDebounce == true 
+		and (curStamina - 60) >= 0 
+	then
+		if not rollDebounce and not vaulting then
+			if characterHumanoid.FloorMaterial == Enum.Material.Air then return end
+
+			canRun = false
+
+			if Running then
+				speedup:Cancel()
+				characterHumanoid.WalkSpeed = 12
+			else
+				characterHumanoid.WalkSpeed = 12
+				FOVNormal:Play()
+				RunAnimation:Stop()
+			end
+
+			-- Play the slide sound
+			slideSound:Play()
+
+			SlideDebounce = false
+
+			script.SCRIPT.EVENTS.Tackle:FireServer()
+
+			wait(0.6)
+
+			canRun = true
+
+			if Running then
+				characterHumanoid.WalkSpeed = 15
+			else
+				FOVNormal:Play()
+				RunAnimation:Stop()
+			end
+
+			curStamina = curStamina - 60
+
+			wait(SlideCD)
+
+			SlideDebounce = true
+		end
+	end
+end)
+
+userInputService.InputBegan:Connect(function(userInput, gameProcessed)
+	if gameProcessed then return end
+	if userInput.KeyCode == Enum.KeyCode.R and not playerCharacter:FindFirstChild("Ball") and not playerCharacter:FindFirstChild("knock") and TackDebounce == true then
+		if not rollDebounce and not vaulting then
+			if characterHumanoid.FloorMaterial == Enum.Material.Air then return end
+
+			canRun = false
+
+			--[[if Running then
+				speedup:Cancel()
+				characterHumanoid.WalkSpeed = 8
+			else
+				characterHumanoid.WalkSpeed = 8
+				FOVNormal:Play()
+				RunAnimation:Stop()
+			end]]
+
+
+			TackDebounce = false
+
+			script.SCRIPT.EVENTS.STACK:FireServer()
+
+
+			wait(0.6)
+
+			canRun = true
+
+			if Running then
+				characterHumanoid.WalkSpeed = 15
+			else
+				FOVNormal:Play()
+				RunAnimation:Stop()
+			end
+
+			curStamina = curStamina - 60
+
+			wait(TackCD)
+
+			TackDebounce = true
+		end
+	end
+end)
+
+
+local LeftDashDebounce = true
+local RightDashDebounce = true
+local FowardDashDebounce = true
+local ISDASH = false
+local DashCD = 6
+
+if DataFolder["Trait"].Value == "Quickdribbles" then
+	DashCD = 4
+end
+
+if DataFolder["Trait"].Value == "Cold-Blooded Finisher" then
+	DashCD = 4
+end
+
+if DataFolder["Trait"].Value == "WatchYaAnkles" then
+	DashCD = 3
+end
+
+if DataFolder["Trait"].Value == "Kaiser Impact" then
+	DashCD = 1
+end
+
+
+local TweenService = game:GetService("TweenService")
+
+userInputService.InputBegan:Connect(function(userInput, gameProcessed)
+	if gameProcessed then return end
+	if userInput.KeyCode == Enum.KeyCode.Z and playerCharacter:FindFirstChild("Ball") and LeftDashDebounce == true then
+		if characterHumanoid.FloorMaterial == Enum.Material.Air or ISDASH == true then return end
+
+		script.SCRIPT.EVENTS.LeftDribble:FireServer()
+
+		LeftDashDebounce = false
+
+
+		if LandAnimation.IsPlaying then
+			LandAnimation:Stop()
+		end
+
+		curStamina = curStamina - 40
+
+		wait(0.3)
+
+
+		canRun = true
+
+		if Running then
+			speedup:Play()
+		else
+			characterHumanoid.WalkSpeed = 15
+			FOVNormal:Play()
+			RunAnimation:Stop()
+		end
+
+		wait(0.3)
+
+		ISDASH = false
+
+		task.wait(DashCD)
+
+		LeftDashDebounce = true
+
+	end
+end)
+
+userInputService.InputBegan:Connect(function(userInput, gameProcessed)
+	if gameProcessed then return end
+	if userInput.KeyCode == Enum.KeyCode.C and playerCharacter:FindFirstChild("Ball") and RightDashDebounce == true then
+		if characterHumanoid.FloorMaterial == Enum.Material.Air or ISDASH == true then return end
+
+		script.SCRIPT.EVENTS.RightDribble:FireServer()
+
+		RightDashDebounce = false
+
+
+		if LandAnimation.IsPlaying then
+			LandAnimation:Stop()
+		end
+
+		curStamina = curStamina - 40
+
+		wait(0.3)
+
+
+		canRun = true
+
+		if Running then
+			speedup:Play()
+		else
+			characterHumanoid.WalkSpeed = 15
+			FOVNormal:Play()
+			RunAnimation:Stop()
+		end
+
+		wait(1)
+
+		ISDASH = false
+
+		task.wait(DashCD)
+
+		RightDashDebounce = true
+
+	end
+end)
+
+local BackDashDebounce = true
+
+local holding = false
+local chakraevent = script:WaitForChild("GiveChakra")
+local Player = game.Players.LocalPlayer
+repeat wait() until Player.Character
+Character = Player.Character
+
+
+--local shoo = script:WaitForChild("GiveChakra3")
+local Mouse = Player:GetMouse()
+local Cooldown = false
+
+userInputService.InputBegan:Connect(function(userInput, gameProcessed)
+	if gameProcessed then return end
+	if userInput.UserInputType == Enum.UserInputType.MouseButton1 and Character:FindFirstChild("Ball") and not playerCharacter:FindFirstChild("CantKick") and not Cooldown then
+		--[[local isshoot = Instance.new("Folder", playerCharacter)
+		isshoot.Name = "isshoot"
+		game.Debris:AddItem(isshoot)]]
+
+		holding = true
+		script.charged.Value = true
+		Player.PlayerGui.Bar2.Enabled = true
+		script.Chakra:FireServer(true)
+		--chakraevent3:FireServer()
+
+		repeat task.wait() until not holding
+		script.Chakra:FireServer(false)
+	end
+end)
+
+
+userInputService.InputEnded:Connect(function(userInput, gameProcessed)
+	if gameProcessed then return end
+	--[[if userInput.KeyCode == Enum.KeyCode.H and charging then
+		script.SCRIPT.EVENTS.Overcharge:FireServer(false)
+		charging = false
+		if playerCharacter:FindFirstChild("CantKick") then
+			playerCharacter.CantKick:Destroy()
+		end
+		hum.WalkSpeed = 15
+	end--]]
+	if userInput.UserInputType == Enum.UserInputType.MouseButton1 and Character:FindFirstChild("Ball") and not playerCharacter:FindFirstChild("CantKick") and not Cooldown then
+		Cooldown = true
+		holding = false
+
+		local plr = Player
+
+		Character.HumanoidRootPart.Anchored = false
+
+		if playerCharacter:FindFirstChild("Ball") then
+			local Ball = plr.Character:FindFirstChild("Ball")
+			Ball.CanCollide = false
+		end
+
+		script.RemoteEvent:FireServer(Mouse.Hit)  
+		--[[wait(1)
+		script.RemoteEvent2:FireServer(Mouse.Hit)  
+		wait(1)
+		wait(1)]]
+		plr.PlayerGui.Bar2.Enabled = false
+
+		wait(1)
+
+		Cooldown = false
+	end
+end)	
+
+userInputService.InputBegan:Connect(function(userInput, gameProcessed)
+	if gameProcessed then return end
+	if userInput.KeyCode == Enum.KeyCode.X and playerCharacter:FindFirstChild("Ball") and BackDashDebounce == true then
+		if characterHumanoid.FloorMaterial == Enum.Material.Air or ISDASH == true then return end
+
+		script.SCRIPT.EVENTS.BackDash:FireServer()
+
+		BackDashDebounce = false
+
+
+		if LandAnimation.IsPlaying then
+			LandAnimation:Stop()
+		end
+
+		curStamina = curStamina - 40
+
+		wait(0.3)
+
+
+		canRun = true
+
+		if Running then
+			speedup:Play()
+		else
+			characterHumanoid.WalkSpeed = 15
+			FOVNormal:Play()
+			RunAnimation:Stop()
+		end
+
+		wait(0.3)
+
+		ISDASH = false
+
+		task.wait(DashCD)
+
+		BackDashDebounce = true
+
+	end
+end)
+
+
+local SKILLCD = 300
+local SKILLDB = true
+
+userInputService.InputBegan:Connect(function(userInput, gameProcessed)
+	if gameProcessed then return end
+	if userInput.KeyCode == Enum.KeyCode.F and SKILLDB == true then
+		SKILLDB = false
+		spawn(function()
+			script.TraitCD.Value = SKILLCD
+			timerTrait(SKILLCD)
+		end)
+		HUD.TraitCD.Visible = true
+
+		if DataFolder.Trait.Value == "Mach Speed" then 
+
+			script.SCRIPT.EVENTS.Machingitup:FireServer()
+
+		end
+		
+		if DataFolder.Trait.Value == "Enhanced Speed" then 
+
+			script.SCRIPT.EVENTS.Enhanced:FireServer()
+
+		end
+
+		if DataFolder.Trait.Value == "Meta Mancer" then 
+
+			script.SCRIPT.EVENTS.Metamancer:FireServer()
+
+		end
+
+		if DataFolder.Trait.Value == "You are not alone" then 
+
+			script.SCRIPT.EVENTS.Notalone:FireServer()
+
+		end
+
+		if DataFolder.Trait.Value == "Cold-Threaded Master" then 
+
+			script.SCRIPT.EVENTS.Cold:FireServer()
+
+		end
+		
+		if DataFolder.Trait.Value == "Bumbling Demon" then 
+
+			script.SCRIPT.EVENTS.Joke:FireServer()
+
+		end
+		
+		if DataFolder.Trait.Value == "Lunar Inhabitor" then 
+
+			script.SCRIPT.EVENTS.Lunar:FireServer()
+
+		end
+		
+		if DataFolder.Trait.Value == "Ace Eater" then 
+
+			script.SCRIPT.EVENTS.Ace:FireServer()
+
+		end
+		
+		if DataFolder.Trait.Value == "Mace Strike" then 
+
+			script.SCRIPT.EVENTS.Macestrike:FireServer()
+
+		end
+
+		if DataFolder.Trait.Value == "Muscle Head" then 
+
+			script.SCRIPT.EVENTS.Rocket:FireServer()
+
+		end
+
+
+		if DataFolder.Trait.Value == "Kaiser Impact" then 
+
+			script.SCRIPT.EVENTS.Kaiserimpact:FireServer()
+
+		end
+
+		if DataFolder.Trait.Value == "Popit" then 
+
+			script.SCRIPT.EVENTS.Popit:FireServer()
+
+		end
+
+
+		wait(SKILLCD)
+		SKILLDB = true
+		HUD.TraitCD.Visible = false
+
+	end
+end)
+
+local cdDEB = false
+
+replicatedStorage.SUBCDshow.OnClientEvent:Connect(function()
+	if cdDEB then return end
+	cdDEB = true
+	TweenService:Create(Player.PlayerGui.SUBCD.TextLabel, TweenInfo.new(.5), {
+		TextTransparency = 0
+	}):Play()
+
+	task.delay(2, function()
+		TweenService:Create(Player.PlayerGui.SUBCD.TextLabel, TweenInfo.new(.5), {
+			TextTransparency = 1
+		}):Play()
+
+		task.delay(.5, function() cdDEB = false end)
+	end)
+end)
+
+
+local GKDB = true
+
+--GKDASHLEFT
+
+userInputService.InputBegan:Connect(function(userInput, gameProcessed)
+	if gameProcessed then return end
+	if userInput.KeyCode == Enum.KeyCode.Z and not playerCharacter:FindFirstChild("Ball") and playerCharacter:FindFirstChild("GK") and GKDB == true then
+		if GKDB == nil then return end
+
+		canRun = false
+		GKDB = false
+
+		curStamina = curStamina - 40
+
+		if not Running then
+			speedup:Cancel()
+			characterHumanoid.WalkSpeed = 0
+		else
+			Running = false
+			characterHumanoid.WalkSpeed = 0
+			FOVNormal:Play()
+			RunAnimation:Stop()
+		end
+
+		if LandAnimation.IsPlaying then
+			LandAnimation:Stop()
+		end
+		GKL:Play()
+
+		local BV = 45
+		local WT = 0.3
+
+		if DataFolder.Trait.Value == "QuickReactions" then
+			BV = 55 
+		end
+		if DataFolder.Trait.Value == "God's Hands" then
+			BV = 65 
+		end
+
+		if DataFolder.Trait.Value == "Explosive Reaction" then
+			BV = 60
+		end
+
+		if DataFolder.Trait.Value == "Last Resort" then
+			BV = 57 
+		end
+
+		local BodyVelocity = Instance.new("BodyVelocity")
+		BodyVelocity.MaxForce = Vector3.new(math.huge,math.huge,math.huge)
+		BodyVelocity.Velocity = characterHumanoidRootPart.CFrame.RightVector * -BV
+		BodyVelocity.Parent = characterHumanoidRootPart
+
+		characterHumanoidRootPart.Dash.Blades:Emit(1)
+		characterHumanoidRootPart.Dash.Specs:Emit(35)
+
+
+		wait(WT)
+
+		for count = 1, 2 do
+			wait(0.1)
+			BodyVelocity.Velocity = BodyVelocity.Velocity * 0.5
+		end
+
+		characterHumanoidRootPart.RIGHT.P2:Emit(30)
+
+		BodyVelocity:Destroy()
+		GKL:Stop()
+		LGet:Play()
+
+		canRun = true
+
+		wait(0.5)
+
+		if Running then
+			speedup:Play()
+		else
+			characterHumanoid.WalkSpeed = 15
+			FOVNormal:Play()
+			RunAnimation:Stop()
+		end
+
+		local GKCD = 4
+
+		if DataFolder.Trait.Value == "God's Hands" then
+			GKCD = 2
+		end
+
+
+		wait(GKCD)
+		GKDB = true
+
+
+	end
+end)
+
+userInputService.InputBegan:Connect(function(userInput, gameProcessed)
+	if gameProcessed then return end
+	if userInput.KeyCode == Enum.KeyCode.C and not playerCharacter:FindFirstChild("Ball") and playerCharacter:FindFirstChild("GK") and GKDB == true then
+		if  GKDB == nil then return end
+
+		canRun = false
+		GKDB = false
+
+		curStamina = curStamina - 40
+
+		if not Running then
+			speedup:Cancel()
+			characterHumanoid.WalkSpeed = 0
+		else
+			Running = false
+			characterHumanoid.WalkSpeed = 0
+			FOVNormal:Play()
+			RunAnimation:Stop()
+		end
+
+		if LandAnimation.IsPlaying then
+			LandAnimation:Stop()
+		end
+
+		GKR:Play()
+
+		local BV = 45
+		local WT = 0.3
+
+		if DataFolder.Trait.Value == "QuickReactions" then
+			BV = 55 
+		end
+		if DataFolder.Trait.Value == "God's Hands" then
+			BV = 65 
+		end
+
+		if DataFolder.Trait.Value == "Explosive Reaction" then
+			BV = 60
+		end
+
+		if DataFolder.Trait.Value == "Last Resort" then
+			BV = 57 
+		end
+
+		local BodyVelocity = Instance.new("BodyVelocity")
+		BodyVelocity.MaxForce = Vector3.new(math.huge,math.huge,math.huge)
+		BodyVelocity.Velocity = characterHumanoidRootPart.CFrame.RightVector * BV
+		BodyVelocity.Parent = characterHumanoidRootPart
+		
+		characterHumanoidRootPart.Dash.Blades:Emit(1)
+		characterHumanoidRootPart.Dash.Specs:Emit(35)
+
+
+		wait(0.3)
+
+		for count = 1, 2 do
+			wait(0.1)
+			BodyVelocity.Velocity = BodyVelocity.Velocity * 0.5
+		end
+
+		characterHumanoidRootPart.RIGHT.P2:Emit(30)
+
+		BodyVelocity:Destroy()
+		GKR:Stop()
+		RGet:Play()
+
+		canRun = true
+
+		wait(0.5)
+
+		if Running then
+			speedup:Play()
+		else
+			characterHumanoid.WalkSpeed = 15
+			FOVNormal:Play()
+			RunAnimation:Stop()
+		end
+
+		local GKCD = 4
+
+		if DataFolder.Trait.Value == "God's Hands" then
+			GKCD = 2
+		end
+
+
+		wait(GKCD)
+		GKDB = true
+		
+
+	end
+end)
+
+userInputService.InputBegan:Connect(function(userInput, gameProcessed)
+	if gameProcessed then return end
+	if userInput.KeyCode == Enum.KeyCode.Q and not playerCharacter:FindFirstChild("Ball") and playerCharacter:FindFirstChild("GK") and GKDB == true then
+		if characterHumanoid.FloorMaterial == Enum.Material.Air or GKDB == nil then return end
+
+		canRun = false
+		GKDB = false
+
+		--highdive
+
+		curStamina = curStamina - 40
+
+		if not Running then
+			speedup:Cancel()
+			characterHumanoid.WalkSpeed = 0
+		else
+			Running = false
+			characterHumanoid.WalkSpeed = 0
+			FOVNormal:Play()
+			RunAnimation:Stop()
+			speedup:Cancel()
+		end
+
+		if LandAnimation.IsPlaying then
+			LandAnimation:Stop()
+		end
+
+		GKHL:Play()
+
+		local BodyVelocity = Instance.new("BodyVelocity")
+		BodyVelocity.MaxForce = Vector3.new(math.huge,math.huge,math.huge)
+
+		BodyVelocity.Velocity = characterHumanoidRootPart.CFrame.UpVector * 30 + characterHumanoidRootPart.CFrame.RightVector * -55
+		BodyVelocity.Parent = characterHumanoidRootPart
+
+
+		wait(0.1)
+
+		for count = 1, 2 do
+			wait(0.1)
+			BodyVelocity.Velocity = BodyVelocity.Velocity * 0.5
+		end
+
+		characterHumanoidRootPart.RIGHT.P2:Emit(30)
+		BodyVelocity:Destroy()
+		GKHL:Stop()
+
+		canRun = true
+
+		wait(0.4)
+		LGet:Play()
+
+		if Running then
+			speedup:Play()
+		else
+			characterHumanoid.WalkSpeed = 15
+			FOVNormal:Play()
+			RunAnimation:Stop()
+		end
+
+		local GKCD = 4
+
+		if DataFolder.Trait.Value == "God's Hands" then
+			GKCD = 2
+		end
+
+
+		wait(GKCD)
+		GKDB = true
+
+	end
+end)
+
+userInputService.InputBegan:Connect(function(userInput, gameProcessed)
+	if gameProcessed then return end
+	if userInput.KeyCode == Enum.KeyCode.E and not playerCharacter:FindFirstChild("Ball") and playerCharacter:FindFirstChild("GK") and GKDB == true then
+		if characterHumanoid.FloorMaterial == Enum.Material.Air or GKDB == nil then return end
+
+		canRun = false
+		GKDB = false
+
+		--highdive
+
+		curStamina = curStamina - 40
+
+		if not Running then
+			speedup:Cancel()
+			characterHumanoid.WalkSpeed = 0
+		else
+			Running = false
+			characterHumanoid.WalkSpeed = 0
+			FOVNormal:Play()
+			RunAnimation:Stop()
+			speedup:Cancel()
+		end
+
+		if LandAnimation.IsPlaying then
+			LandAnimation:Stop()
+		end
+
+		GKHR:Play()
+
+		local BodyVelocity = Instance.new("BodyVelocity")
+		BodyVelocity.MaxForce = Vector3.new(math.huge,math.huge,math.huge)
+
+
+		BodyVelocity.Velocity = characterHumanoidRootPart.CFrame.UpVector * 30 + characterHumanoidRootPart.CFrame.RightVector * 55
+		BodyVelocity.Parent = characterHumanoidRootPart
+
+
+		wait(0.1)
+
+		for count = 1, 2 do
+			wait(0.1)
+			BodyVelocity.Velocity = BodyVelocity.Velocity * 0.5
+		end
+
+		characterHumanoidRootPart.RIGHT.P2:Emit(30)
+		BodyVelocity:Destroy()
+		GKHR:Stop()
+
+		canRun = true
+
+		wait(0.4)
+		RGet:Play()
+
+		if Running then
+			speedup:Play()
+		else
+			characterHumanoid.WalkSpeed = 15
+			FOVNormal:Play()
+			RunAnimation:Stop()
+		end
+
+		local GKCD = 4
+
+		if DataFolder.Trait.Value == "God's Hands" then
+			GKCD = 2
+		end
+
+
+		wait(GKCD)
+		GKDB = true
+
+	end
+end)
+
+
+local FowardCD = 5
+
+if DataFolder["Trait"].Value == "Swift" then
+	FowardCD = 3
+end
+if DataFolder["Trait"].Value == "Bumbling Demon" then
+	FowardCD = 2
+end
+if DataFolder["Trait"].Value == "Kaiser Impact" then
+	FowardCD = 1
+end
+
+if DataFolder["Trait"].Value == "Cheetah" then
+	FowardCD = 6
+end
+
+local userInputService = game:GetService("UserInputService")
+local replicatedStorage = game:GetService("ReplicatedStorage")
+local forwardDashSound = replicatedStorage.Sounds.Dash -- Reference the sound
+
+userInputService.InputBegan:Connect(function(userInput, gameProcessed)
+	if gameProcessed then return end
+	if userInput.KeyCode == Enum.KeyCode.G 
+		and FowardDashDebounce == true 
+		and (curStamina - 40) >= 0 
+	then
+		if characterHumanoid.FloorMaterial == Enum.Material.Air or ISDASH == true then return end
+
+		script.SCRIPT.EVENTS.FowardDash:FireServer()
+
+		FowardDashDebounce = false
+
+		curStamina = curStamina - 40
+
+		if DataFolder["Trait"].Value == "Cheetah" then
+			curStamina = curStamina - 30
+		end
+
+		-- Play the forward dash sound
+		forwardDashSound:Play()
+
+		wait(0.4)
+
+		if Running then
+			speedup:Play()
+		else
+			characterHumanoid.WalkSpeed = 15
+			FOVNormal:Play()
+			RunAnimation:Stop()
+		end
+
+		canRun = true
+		ISDASH = false
+
+		task.wait(FowardCD)
+
+		FowardDashDebounce = true
+	end
+end)
+
+
+characterHumanoid.StateChanged:Connect(function(newState)
+	if newState == Enum.HumanoidStateType.Landed and not rolling and tick() - lastLanding >= 0.75 and not playerCharacter:FindFirstChild("noland") then
+		lastLanding = tick()
+
+		if not Running then
+			characterHumanoid.WalkSpeed = 15
+		else
+			speedup:Play()
+			FOVRun:Play()
+			RunAnimation:Stop()
+		end
+
+		LandAnimation:Play()
+		PlaySound(PlayerSounds.Land, "LandSound", 1, characterHumanoidRootPart)
+
+		task.spawn(function()
+			for i,v in characterHumanoidRootPart.Landed:GetChildren() do
+				v:Emit(v:GetAttribute("EmitCount"))
+			end
+		end)
+
+		--[[characterHumanoidRootPart.Land.P2:Emit(30)
+		characterHumanoidRootPart.Land.Blades:Emit(1)
+		characterHumanoidRootPart.Land.Lines:Emit(20)
+		characterHumanoidRootPart.Land.Specs:Emit(20)]]
+
+		LandAnimation.Stopped:Connect(function()
+			if not Running then
+				characterHumanoid.WalkSpeed = 15
+			else
+				speedup:Play()
+				FOVRun:Play()
+				RunAnimation:Play(0.2)
+			end
+		end)
+	elseif newState == Enum.HumanoidStateType.Jumping then
+		if RunAnimation.IsPlaying then
+			task.spawn(function()
+				for i,v in pairs(characterHumanoid:GetPlayingAnimationTracks()) do
+					if v.Name == "RunAnimation" then
+						coroutine.wrap(function() v:Stop() end)
+					end
+				end
+			end)
+		end		
+	end
+end)
+
+--{{SHOW BODY}}--
+runService:BindToRenderStep("Show Body Parts", Enum.RenderPriority.Character.Value + 1, function()
+	for i,v in pairs(playerCharacter:GetChildren()) do
+		if string.match(v.Name, "Arm") or string.match(v.Name, "Leg") then
+			v.LocalTransparencyModifier = 0
+		end
+	end
+end)
+
+subcdevent.OnClientEvent:Connect(function(cdtime)
+	script:WaitForChild("SubCD").Value = cdtime
+	HUD.SubCD.Visible = true
+	hasSubCd = true
+	timer(cdtime)
+end)
+
+--[[while wait() do
+	if charging then
+		if (curStamina - 50) >= 0 then
+			if script.Overcharge.Value < 100 then
+				curStamina -= 50
+				print('e')
+			end
+		else
+			script.SCRIPT.EVENTS.Overcharge:FireServer(false)
+		end
+	end
+--]]  -- Closing the comment here
+
+-- Start the `while wait() do` loop outside of the commented block
+while wait() do
+	if Running == true then
+		if playerCharacter:FindFirstChild("Mached") then
+			curStamina = curStamina > 0 and curStamina - 3 or 0
+		elseif playerCharacter:FindFirstChild("Enhanced") then
+			curStamina = curStamina > 0 and curStamina - 2.5 or 0
+		else
+			curStamina = curStamina > 0 and curStamina - 1.5 or 0
+		end
+	else
+		if DataFolder.Trait.Value == "Replenisher" then
+			curStamina = curStamina < maxStamina and curStamina + 4 or maxStamina
+		else
+			curStamina = curStamina < maxStamina and curStamina + 2 or maxStamina
+		end
+	end
+
+	-- Properly size/color bar
+	HUD.Stamina.Bar.Size = UDim2.new(curStamina / maxStamina, 1, 1, 1)
+	HUD.SubCD.Bar.Size = UDim2.new(script.SubCD.Value / maxsubcd, 1, 1, 1)
+	--[[HUD.Overcharge.Bar.Size = UDim2.new(script.Overcharge.Value / 100, 1, 1, 1)--]]
+	HUD.TraitCD.Bar.Size = UDim2.new(script.TraitCD.Value / 300, 1, 1, 1)
+	--[[if script.Overcharge.Value == 0 then
+		HUD.Overcharge.Visible = false
+	else
+		HUD.Overcharge.Visible = true
+	end--]]
+	if curStamina < 10 then 
+		Running = false
+		characterHumanoid.WalkSpeed = 15
+		FOVNormal:Play()
+		RunAnimation:Stop()
+		speedup:Cancel()
+	end
+
+	if curStamina < 500 then 
+		playerCharacter.Torso.ParticleEmitter.Enabled = true
+		playerCharacter.Head.ParticleEmitter.Enabled = true
+		playerCharacter["Right Arm"].ParticleEmitter.Enabled = true
+		playerCharacter["Left Arm"].ParticleEmitter.Enabled = true
+		playerCharacter["Left Leg"].ParticleEmitter.Enabled = true
+		playerCharacter["Right Leg"].ParticleEmitter.Enabled = true
+	else
+		playerCharacter.Torso.ParticleEmitter.Enabled = false
+		playerCharacter.Head.ParticleEmitter.Enabled = false
+		playerCharacter["Right Arm"].ParticleEmitter.Enabled = false
+		playerCharacter["Left Arm"].ParticleEmitter.Enabled = false
+		playerCharacter["Left Leg"].ParticleEmitter.Enabled = false
+		playerCharacter["Right Leg"].ParticleEmitter.Enabled = false
+	end
+end
